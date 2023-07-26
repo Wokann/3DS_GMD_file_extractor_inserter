@@ -39,19 +39,10 @@ namespace gmd
                 }
                 else if (mode == "-i")
                 {
-                    string header = args[1];
-                    if (!header.Contains("-header="))
-                    {
-                        Console.WriteLine("You must specify a 'header' option when inserting.");
-                        Usage();
-                        return;
-                    }
-                    uint h = Convert.ToUInt32((header.Replace("-header=", "") == "eng"));
-                    f += 1;
                     for (; f < argc; f++)
                     {
                         Console.WriteLine(" - Inserting " + args[f]);
-                        Insert(args[f], h);
+                        Insert(args[f]);
                     }
                 }
                 else
@@ -147,7 +138,12 @@ namespace gmd
                             break;
                         }
                     }
-                    byte[] dummy = br.ReadBytes(0x400);
+
+                    uint[] dummy = new uint[0x100];
+                    for(int i = 0; i < 0x100; i++)
+                    {
+                        dummy[i] = br.ReadUInt32();
+                    }
 
                     string[] labels = new string[textnums];
 
@@ -168,25 +164,27 @@ namespace gmd
 
                     using (StreamWriter sw = new StreamWriter(File.Create(filename.Replace(".gmd", ".txt")), enc))
                     {
-                        sw.WriteLine("{name         :"   + name                              + "}");
-                        sw.WriteLine("{GMDversion   :0x" + Convert.ToString(GMDversion,16)   + "}");
-                        sw.WriteLine("{language     :0x" + Convert.ToString(language,16)     + "}");
-                        sw.WriteLine("{unknown      :0x" + Convert.ToString(unknown,16)      + "}");
-                        sw.WriteLine("{labelnums    :0x" + Convert.ToString(labelnums,16)    + "}");
-                        sw.WriteLine("{textnums     :0x" + Convert.ToString(textnums,16)     + "}");
-                        sw.WriteLine("{labelsize    :0x" + Convert.ToString(labelsize,16)    + "}");
-                        sw.WriteLine("{textdatasize :0x" + Convert.ToString(textdatasize,16) + "}");
+                        sw.WriteLine("{GMDversion   :" + Convert.ToString(GMDversion)   + "}");
+                        sw.WriteLine("{language     :" + Convert.ToString(language)     + "}");
+                        sw.WriteLine("{unknown      :" + Convert.ToString(unknown)      + "}");
+                        sw.WriteLine("{labelnums    :" + Convert.ToString(labelnums)    + "}");
+                        sw.WriteLine("{textnums     :" + Convert.ToString(textnums)     + "}");
+                        sw.WriteLine("{labelsize    :" + Convert.ToString(labelsize)    + "}");
+                        sw.WriteLine("{textdatasize :" + Convert.ToString(textdatasize) + "}");
+                        sw.WriteLine("{name         :" + name                           + "}");
                         sw.WriteLine();
+
                         int idx = 0;
                         for (int i = 0; i < textnums; i++)
                         {
                             int size = 0;
                             int start = idx;
-                            sw.WriteLine("[" + Convert.ToString(i) + ":" + labels[i] + "]" 
-                                       + "[" + Convert.ToString(labeloffs1[i],16) 
-                                       + "," + Convert.ToString(labeloffs2[i],16) 
-                                       + "," + Convert.ToString(labeloffs3[i],16) 
-                                       + "," + Convert.ToString(labeloffs4[i],16) + "]");
+                            sw.WriteLine("[" + Convert.ToString(i) 
+                                       + ":" + labels[i]
+                                       + ":" + Convert.ToString(labeloffs1[i]) 
+                                       + ":" + Convert.ToString(labeloffs2[i]) 
+                                       + ":" + Convert.ToString(labeloffs3[i]) 
+                                       + ":" + Convert.ToString(labeloffs4[i]) + "]");
                             while (plaintext[idx] != 0x00)
                             {
                                 size += 1;
@@ -198,18 +196,17 @@ namespace gmd
                             sw.WriteLine("{end}");
                             sw.WriteLine();
                         }
-                        sw.WriteLine("{dummy(HEX):{");
-                        for (int i = 0; i < 1024; i++)
-                        {
-                            if(dummy[i] < 0x10)
-                                sw.Write("0"+ Convert.ToString(dummy[i],16));
-                            else
-                                sw.Write(Convert.ToString(dummy[i],16));
-                            if ((i+1) % 16 == 0)
-                                sw.WriteLine("");
-                        }
-                        sw.WriteLine("}");
 
+                        sw.WriteLine("{dummy}");
+                        for (int i = 0; i < 0x100; i++)
+                        {
+                            sw.WriteLine("[" + Convert.ToString(i*4) 
+                                       + ":" + Convert.ToString(dummy[i++]) 
+                                       + ":" + Convert.ToString(dummy[i++]) 
+                                       + ":" + Convert.ToString(dummy[i++]) 
+                                       + ":" + Convert.ToString(dummy[i]) + "]");
+                        }
+                        sw.WriteLine();
                     }
                 }
                 else
@@ -225,51 +222,59 @@ namespace gmd
 
             System.Text.Encoding enc = System.Text.Encoding.GetEncoding("utf-8");
 
-            uint initialOffset = 0;
+            UInt32 initialGMDversion = 0;
+            UInt32 initiallanguage = 0;
             uint unknown = 0;
+            uint labelnum = 0;
+            uint textnum = 0;
+            string name = "";
+
+            List<uint> idList = new List<uint>();
+            List<string> labelList = new List<string>();
+            List<uint> labeloffs1List = new List<uint>();
+            List<uint> labeloffs2List = new List<uint>();
+            List<uint> labeloffs3List = new List<uint>();
+            List<uint> labeloffs4List = new List<uint>();
+            List<uint> dummyList = new List<uint>();
+
             byte[] plaintext;
             byte[] newline = new byte[] { 0xa };
             byte[] newpage = new byte[] { 0xd, 0xa };
-            uint textnum = 0;
-            uint labelnum = 0;
-            string name = "";
-            List<string> labelList = new List<string>();
-            List<uint> idList = new List<uint>();
 
             using (MemoryStream textStream = new MemoryStream())
             {
                 using (StreamReader sr = new StreamReader(File.OpenRead(filename), enc))
                 {
+                    // read the initial GMDversion
+                    string GMDversion = sr.ReadLine();
+                    if (GMDversion.Contains("{") && GMDversion.Contains("}"))
+                        initialGMDversion = Convert.ToUInt32(GMDversion.Substring(15, GMDversion.Length - 16));
+                    else
+                    {
+                        Console.WriteLine("Expected initial GMDversion in line ");
+                        Console.WriteLine(GMDversion);
+                        return;
+                    }
 
-                    // read the internal file name
-                    name = sr.ReadLine();
-                    if (name.Contains("{") && name.Contains("}"))
-                    {
-                        name = name.Substring(15, name.Length - 2);
-                    }
+                    // read the initial language
+                    string language = sr.ReadLine();
+                    if (language.Contains("{") && language.Contains("}"))
+                        initiallanguage = Convert.ToUInt32(language.Substring(15, language.Length - 16));
                     else
                     {
-                        Console.WriteLine("Expected internal file name in line ");
-                        Console.WriteLine(name);
+                        Console.WriteLine("Expected initial language in line ");
+                        Console.WriteLine(language);
                         return;
                     }
-                    // read the initial offset
-                    string offset = sr.ReadLine();
-                    if (offset.Contains("{") && offset.Contains("}"))
-                    {
-                        initialOffset = Convert.ToUInt32(offset.Substring(1, offset.Length - 2));
-                    }
-                    else
-                    {
-                        Console.WriteLine("Expected initial offset in line ");
-                        Console.WriteLine(offset);
-                        return;
-                    }
+
                     // read the unknown value
                     string unk = sr.ReadLine();
                     if (unk.Contains("{") && unk.Contains("}"))
                     {
-                        unknown = Convert.ToUInt32(unk.Substring(1, unk.Length - 2));
+                        unknown = Convert.ToUInt32(unk.Substring(15, unk.Length - 16));
+                        sr.ReadLine();
+                        sr.ReadLine();
+                        sr.ReadLine();
                         sr.ReadLine();
                     }
                     else
@@ -278,45 +283,87 @@ namespace gmd
                         Console.WriteLine(unk);
                         return;
                     }
+
+                    // read the internal file name
+                    name = sr.ReadLine();
+                    if (name.Contains("{") && name.Contains("}"))
+                    {
+                        name = name.Substring(15, name.Length - 16);
+                        sr.ReadLine();
+                    }
+                    else
+                    {
+                        Console.WriteLine("Expected internal file name in line ");
+                        Console.WriteLine(name);
+                        return;
+                    }
+
                     while (!sr.EndOfStream)
                     {
-                                // begin reading file
-                                string line = sr.ReadLine();
-                                if (line.Contains("[") && line.Contains("]"))
-                                {
-                                    // get the id and label
-                                    line = line.Substring(1, line.Length - 2);
-                                    uint id = Convert.ToUInt32(line.Split(':')[0]);
-                                    string lbl = line.Split(':')[1];
-                                    if (lbl != "NO_LABEL")
-                                    {
-                                        idList.Add(id);
-                                        labelList.Add(lbl);
-                                        labelnum += 1;
-                                    }                                    
-                                    textnum = id;
-                                    line = sr.ReadLine();
-                                    // then the text
-                                    while (!line.Contains("{end}"))
-                                    {
-                                        byte[] buf = enc.GetBytes(line);
-                                        textStream.Write(buf, 0, buf.Length);
-                                        textStream.Write(newpage, 0, 2);
-                                        line = sr.ReadLine();
-                                    }
-                                    // reached {end} line
-                                    line = line.Substring(0, line.Length - 5);
-                                    byte[] buf2 = enc.GetBytes(line);
-                                    textStream.Write(buf2, 0, buf2.Length);
-                                    textStream.WriteByte(Convert.ToByte(0x00));
-                                    sr.ReadLine();
-                                }
-                                else
-                                {
-                                    Console.WriteLine("Expected label in line ");
-                                    Console.WriteLine(line);
-                                    return;
-                                }
+                        // begin reading file
+                        string line = sr.ReadLine();
+                        if (line.Contains("[") && line.Contains("]"))
+                        {
+                            // get the id and label
+                            line = line.Substring(1, line.Length - 2);
+                            uint id = Convert.ToUInt32(line.Split(':')[0]);
+                            string lbl = line.Split(':')[1];
+                            UInt32 labeloffs1 = Convert.ToUInt32(line.Split(':')[2]);
+                            UInt32 labeloffs2 = Convert.ToUInt32(line.Split(':')[3]);
+                            UInt32 labeloffs3 = Convert.ToUInt32(line.Split(':')[4]);
+                            UInt32 labeloffs4 = Convert.ToUInt32(line.Split(':')[5]);
+                            if (lbl != "NO_LABEL")
+                            {
+                                idList.Add(id);
+                                labelList.Add(lbl);
+                                labeloffs1List.Add(labeloffs1);
+                                labeloffs2List.Add(labeloffs2);
+                                labeloffs3List.Add(labeloffs3);
+                                labeloffs4List.Add(labeloffs4);
+                                labelnum += 1;
+                            }                                    
+                            textnum = id;
+                            line = sr.ReadLine();
+                            // then the text
+                            while (!line.Contains("{end}"))
+                            {
+                                byte[] buf = enc.GetBytes(line);
+                                textStream.Write(buf, 0, buf.Length);
+                                textStream.Write(newpage, 0, 2);
+                                line = sr.ReadLine();
+                            }
+                            // reached {end} line
+                            line = line.Substring(0, line.Length - 5);
+                            byte[] buf2 = enc.GetBytes(line);
+                            textStream.Write(buf2, 0, buf2.Length);
+                            textStream.WriteByte(Convert.ToByte(0x00));
+                            sr.ReadLine();
+                        }
+                        //dummy 
+                        else if(line.Contains("{dummy}"))
+                        {
+                            for (int i = 0; i < 0x40; i++)
+                            {
+                                line = sr.ReadLine();
+                                line = line.Substring(1, line.Length - 2);
+                                uint dummyid = Convert.ToUInt32(line.Split(':')[0]);
+                                UInt32 dummyoffs1 = Convert.ToUInt32(line.Split(':')[1]);
+                                UInt32 dummyoffs2 = Convert.ToUInt32(line.Split(':')[2]);
+                                UInt32 dummyoffs3 = Convert.ToUInt32(line.Split(':')[3]);
+                                UInt32 dummyoffs4 = Convert.ToUInt32(line.Split(':')[4]);
+                                dummyList.Add(dummyoffs1);
+                                dummyList.Add(dummyoffs2);
+                                dummyList.Add(dummyoffs3);
+                                dummyList.Add(dummyoffs4);
+                            }
+                            sr.ReadLine();
+                        }
+                        else
+                        {
+                            Console.WriteLine("Expected label in line ");
+                            Console.WriteLine(line);
+                            return;
+                        }
                     }
                     // all the file has been read, time to mash into shape
                     plaintext = textStream.ToArray();
@@ -334,8 +381,8 @@ namespace gmd
                     {
                         // header
                         bw.Write(0x00444D47); // GMD\0
-                        bw.Write(0x00010302); // unknown
-                        bw.Write(0x0); // eng = 0x1, jap = 0x0
+                        bw.Write(initialGMDversion); // unknown
+                        bw.Write(initiallanguage); // eng = 0x1, jap = 0x0
                         bw.Write(unknown); // unknown
                         bw.Write(0x0); // unknown
                         bw.Write(labelnum);
@@ -346,12 +393,18 @@ namespace gmd
                         bw.Write(name.ToCharArray());
                         bw.Write(Convert.ToByte(0x00));
                         // begin pointer table
-                        uint currentOffset = initialOffset;
                         for (int i = 0; i < labelnum; i++)
                         {
                             bw.Write(idList[i]);
-                            bw.Write(currentOffset);
-                            currentOffset += Convert.ToUInt32(labelStringArray[i].Length + 1);
+                            bw.Write(labeloffs1List[i]);
+                            bw.Write(labeloffs2List[i]);
+                            bw.Write(labeloffs3List[i]);
+                            bw.Write(labeloffs4List[i]);
+                        }
+                        // begin dummy
+                        for (int i = 0; i < 0x100; i++)
+                        {
+                            bw.Write(dummyList[i]);
                         }
                         // begin labels
                         for (int i = 0; i < labelnum; i++)
